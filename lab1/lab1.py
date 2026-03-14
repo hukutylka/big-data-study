@@ -1,64 +1,156 @@
+
 import pandas as pd
-values_df=pd.read_csv("surv.csv",delimiter=',')
-print("Массив данных")
-print(values_df.info)
+df = pd.read_csv("surv.csv")
 
-import numpy as np
-header = np.genfromtxt("surv.csv", delimiter=",", max_rows=1, dtype=str)
+print("Исходный размер:", df.shape)
 
-# считываем данные без первой строки
-data = np.genfromtxt("surv.csv", delimiter=",", skip_header=1)
+# 1. удаление пропусков
+before = df.shape[0]
+df = df.dropna()
+after = df.shape[0]
+print("Удалено строк с пропусками:", before - after)
 
-for i in range(1, data.shape[1]):
-    print("Признак:", header[i])
-
-    x = data[:, i]
-    
-
-    size = np.size(x)
-    min_x = np.min(x)
-    max_x = np.max(x)
-    sum_x = np.sum(x)
-    sum2_x = np.dot(x, x)
-
-    mean_x = sum_x / size
-
-    var_x = np.var(x)
-    sdm_x = var_x * size
-    std_x = np.sqrt(var_x)
-    varcoef_x = std_x / mean_x
-
-    print("Минимум: ", min_x)
-    print("Максимум: ", max_x)
-    print("Среднее значение: ", mean_x)
-    print("Дисперсия: ", var_x)
-    print("Среднеквадратичное отклонение: ", std_x)
-    print("Коэффициент вариации: ", varcoef_x)
-    print("Медиана: ", np.median(x))
-    print("Квантили [25, 50, 75]: ", np.percentile(x, [25, 50, 75]))
-    print("Размах: ", max_x - min_x)
-    print(" ")
-    
-    
-    
-#Удаление строк с некорректными значениями
+# 2. удаление строк с некорректными значениями
 q_cols = [f"Q{i}" for i in range(1, 29)]
-values_df = values_df[
-    (values_df["instr"].between(1, 3)) &
-    (values_df["class"].between(1, 13)) &
-    (values_df["attendance"].between(1, 4)) &
-    (values_df["difficulty"].between(1, 5))
+
+before = df.shape[0]
+
+df = df[
+    (df["instr"].between(1, 3)) &
+    (df["class"].between(1, 13)) &
+    (df["difficulty"].between(1, 5))
 ]
 for col in q_cols:
-    values_df = values_df[values_df[col].between(1, 5)]
+    df = df[df[col].between(1, 5)]
 
-print("Размер таблицы:", values_df.shape)
+after = df.shape[0]
+print("Удалено строк с некорректными значениями:", before - after)
+
+# 3. поиск и удаление анкет с одинаковыми ответами по всем вопросам
+before = df.shape[0]
+
+# выбираем анкеты, где все ответы одинаковые
+same_answer_rows = df[df[q_cols].nunique(axis=1) == 1]
+
+# добавляем столбец со значением этого одинакового ответа
+same_answer_rows["same_value"] = same_answer_rows[q_cols[0]]
+
+# считаем, сколько таких анкет для каждого значения ответа
+same_answer_counts = same_answer_rows["same_value"].value_counts().sort_index()
+
+print("Количество анкет с одинаковыми ответами по величине ответа:")
+print(same_answer_counts)
+
+# удаляем такие анкеты из основного датафрейма
+df = df[df[q_cols].nunique(axis=1) > 1]
+
+after = df.shape[0]
+print("Удалено анкет с одинаковыми ответами:", before - after)
+#4. удаление анкет с нулевым посещением
+before = df.shape[0]
+df = df[
+    (df["attendance"].between(1, 4))]
+after = df.shape[0]
+print("Удалено анкет с нулевым посещением:", before - after)
+
+print("Итоговый размер:", df.shape)
+print(df.head())
+
+df.to_csv("surv-clean.csv", index=False)
 
 
-# 3. Удаление анкет с одинаковыми ответами по всем вопросам
 
-values_df = values_df[values_df[q_cols].nunique(axis=1) > 1]
+dff = pd.read_csv("surv-clean.csv")
 
-# результат
-print("Размер очищенной таблицы:", values_df.shape)
-print(values_df.info)
+# выбираем только оценки (Q1–Q28)
+cols = [c for c in dff.columns if "Q" in c]
+
+
+# функция удаления выбросов
+def remove_outliers(data):
+    Q1 = data.quantile(0.25)
+    Q3 = data.quantile(0.75)
+    IQR = Q3 - Q1
+
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+
+    return data[~((data < lower) | (data > upper)).any(axis=1)]
+
+
+clean_dff = remove_outliers(dff[cols])
+
+print("Размер до:", dff.shape)
+print("После удаления:", clean_dff.shape)
+
+
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+corr_matrix = clean_dff.corr()
+
+plt.figure(figsize=(12,10))
+
+sns.heatmap(
+    corr_matrix,
+    cmap="coolwarm",
+    annot=True,
+    fmt=".2f",
+    annot_kws={"size": 7}   # размер чисел внутри ячеек
+)
+
+plt.title("Матрица корреляций")
+plt.show()
+
+
+subjects = df['class'].unique()
+
+for s in subjects[:3]:
+    subset = df[df['class'] == s][cols]
+    corr_matrix = subset.corr()
+
+    # убираем единицы на диагонали
+    corr_values = corr_matrix.values
+    n = corr_values.shape[0]
+
+    mean_corr = (corr_values.sum() - n) / (n * n - n)
+
+    print(f"\nПредмет {s}")
+    print("Средняя корреляция:", mean_corr)
+    
+    
+    
+    
+teacher_stats = dff.groupby("instr")[cols].mean()
+
+print("\nОписательная статистика преподавателей:")
+print(teacher_stats.describe())
+
+teacher_stats["rating"] = teacher_stats.mean(axis=1)
+
+print("\nРейтинг преподавателей:")
+print(teacher_stats.sort_values("rating", ascending=False))
+
+
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+subject_stats = df.groupby("class")[cols].mean()
+
+subject_stats["rating"] = subject_stats.mean(axis=1)
+
+print("\nРейтинг предметов:")
+print(subject_stats.sort_values("rating", ascending=False))
+
+# график средней оценки предметов
+plt.figure(figsize=(10, 6))
+subject_stats["rating"].plot(kind="bar")
+
+plt.title("Средняя оценка предметов")
+plt.xlabel("Предмет")
+plt.ylabel("Средняя оценка")
+plt.xticks(rotation=0)
+
+plt.show()
